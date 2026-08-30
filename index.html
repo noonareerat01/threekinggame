@@ -1,774 +1,777 @@
-<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ประตูท่าแพ จับคู่ตัวเลขมหัศจรรย์ (AR Educational Game)</title>
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Star, Volume2, RefreshCw, Trophy, Coins, Map, Camera, Hand, AlertCircle, Loader, Home, Info } from 'lucide-react';
+
+// --- Configuration & Assets ---
+const BACKGROUND_URL = 'https://img2.pic.in.th/41b34708-89eb-49e1-84fb-5db417abdcec.png';
+const TOTAL_QUESTIONS = 20;
+const EMOJIS = ['🍎', '🍊', '🍓', '🚗', '🎈', '🐶', '🐱', '🦋', '⭐', '🧁'];
+
+// --- Helper Functions ---
+const generateQuestions = (count) => {
+  const questions = [];
+  for (let i = 0; i < count; i++) {
+    const whole = Math.floor(Math.random() * 8) + 3; // 3 to 10
+    const part1 = Math.floor(Math.random() * (whole - 1)) + 1;
+    const part2 = whole - part1;
     
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    // สุ่มประเภทของคำถาม 0=หาส่วนรวม, 1=หาส่วนย่อย1, 2=หาส่วนย่อย2, 3=หาประโยคสัญลักษณ์
+    const qType = Math.floor(Math.random() * 4);
+    let missingField = '';
+    let correctAnswer = 0;
+    let isEquation = false;
+    let options = [];
     
-    <!-- Google Fonts for Thai Typography -->
-    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800&family=Prompt:wght@400;700&display=swap" rel="stylesheet">
-    
-    <!-- MediaPipe Libraries for Hand Tracking -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    if (qType === 3) {
+      // โหมดหาประโยคสัญลักษณ์ (Equation)
+      isEquation = true;
+      correctAnswer = `${part1} + ${part2} = ${whole}`;
+      options.push(correctAnswer);
+      
+      // ตัวลวงที่ 1: ผลบวกผิด
+      let wrongSum = whole + (Math.random() > 0.5 ? 1 : -1);
+      if (wrongSum === whole) wrongSum += 1;
+      options.push(`${part1} + ${part2} = ${wrongSum}`);
+      
+      // ตัวลวงที่ 2: ผลบวกถูก แต่ส่วนย่อยไม่ตรงกับภาพ
+      let wrongPart1 = part1 + (Math.random() > 0.5 ? 1 : -1);
+      if (wrongPart1 <= 0 || wrongPart1 >= whole || wrongPart1 === part1) {
+          wrongPart1 = (part1 === 1) ? 2 : 1; 
+      }
+      let wrongPart2 = whole - wrongPart1;
+      options.push(`${wrongPart1} + ${wrongPart2} = ${whole}`);
+      
+      options.sort(() => Math.random() - 0.5);
 
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            font-family: 'Kanit', sans-serif;
-            background-color: #1a202c;
-            /* Background image as requested */
-            background-image: url('https://img1.pic.in.th/images/-1de254d980c965e46.png');
-            background-size: cover;
-            background-position: center;
-            background-repeat: no-repeat;
+    } else {
+      // โหมดหาตัวเลขที่หายไปปกติ
+      if (qType === 0) {
+        missingField = 'whole';
+        correctAnswer = whole;
+      } else if (qType === 1) {
+        missingField = 'part1';
+        correctAnswer = part1;
+      } else {
+        missingField = 'part2';
+        correctAnswer = part2;
+      }
+
+      options = [correctAnswer];
+      while (options.length < 3) {
+        let wrongAnswer = Math.floor(Math.random() * 10) + 1;
+        if (!options.includes(wrongAnswer) && wrongAnswer !== correctAnswer) {
+          options.push(wrongAnswer);
         }
+      }
+      options.sort(() => Math.random() - 0.5);
+    }
 
-        #gameCanvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 10;
-            transform: scaleX(-1);
-            /* ป้องกันหน้าจอเลื่อนเมื่อแตะเล่นผ่านมือถือ/แท็บเล็ต */
-            touch-action: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
+    questions.push({
+      id: i,
+      whole,
+      part1,
+      part2,
+      missingField,
+      isEquation,
+      options,
+      correctAnswer,
+      emoji: EMOJIS[Math.floor(Math.random() * EMOJIS.length)]
+    });
+  }
+  return questions;
+};
 
-        #webcamVideo {
-            display: none;
-        }
+const speak = (text) => {
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'th-TH';
+    utterance.rate = 0.9;
+    window.speechSynthesis.speak(utterance);
+  }
+};
 
-        #uiLayer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 20;
-            pointer-events: none;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-
-        .interactive {
-            pointer-events: auto;
-        }
-
-        @keyframes float {
-            0% { transform: translateY(0px); }
-            50% { transform: translateY(-10px); }
-            100% { transform: translateY(0px); }
-        }
-        
-        .animate-float {
-            animation: float 3s ease-in-out infinite;
-        }
-
-        @keyframes pulse-glow {
-            0% { box-shadow: 0 0 10px #fcd34d; }
-            50% { box-shadow: 0 0 25px #fbbf24, 0 0 40px #f59e0b; }
-            100% { box-shadow: 0 0 10px #fcd34d; }
-        }
-
-        .glow-box {
-            animation: pulse-glow 2s infinite;
-        }
-
-        .text-outline {
-            text-shadow: 
-                -2px -2px 0 #000,  
-                 2px -2px 0 #000,
-                -2px  2px 0 #000,
-                 2px  2px 0 #000,
-                 0px  4px 10px rgba(0,0,0,0.5);
-        }
-
-        .modal-bg {
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(5px);
-        }
-    </style>
-</head>
-<body>
-
-    <video id="webcamVideo" autoplay playsinline></video>
-    <canvas id="gameCanvas"></canvas>
-
-    <div id="uiLayer" class="p-4 sm:p-6">
-        <div id="hud" class="hidden flex justify-between items-start w-full">
-            <div class="flex flex-col gap-2">
-                <div class="bg-white/90 backdrop-blur rounded-2xl px-4 py-2 border-4 border-blue-500 shadow-xl flex items-center gap-2">
-                    <span class="text-3xl">⭐</span>
-                    <span class="text-2xl font-bold text-blue-700">คะแนน: <span id="scoreDisplay">0</span></span>
-                </div>
-                <div class="bg-white/90 backdrop-blur rounded-2xl px-4 py-2 border-4 border-red-500 shadow-xl flex items-center gap-2">
-                    <span class="text-3xl">⏱️</span>
-                    <span class="text-2xl font-bold text-red-600">เวลา: <span id="timeDisplay">120</span></span>
-                </div>
-                <div class="bg-white/90 backdrop-blur rounded-2xl px-4 py-2 border-4 border-indigo-500 shadow-xl flex items-center gap-2">
-                    <span class="text-3xl">🕊️</span>
-                    <span class="text-lg font-bold text-indigo-700">ด่าน: <span id="levelDisplay">1</span>/10</span>
-                </div>
-            </div>
-
-            <div class="bg-yellow-400/95 backdrop-blur rounded-3xl px-6 py-4 border-4 border-yellow-600 glow-box interactive transform hover:scale-105 transition-transform text-center">
-                <h2 class="text-xl sm:text-2xl font-bold text-yellow-900 mb-1">🎯 ภารกิจจับคู่นกพิราบ</h2>
-                <div class="text-2xl sm:text-4xl font-black text-white text-outline">
-                    ส่วนย่อยของ <span id="targetDisplay" class="text-5xl text-red-500 bg-white px-3 rounded-xl ml-2">1</span>
-                </div>
-                <p class="text-sm font-semibold text-yellow-900 mt-1">
-                    เหลืออีก <span id="remainingCount" class="text-red-700 font-bold text-lg">0</span> คู่ที่ต้องหา!
-                </p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Start Menu Modal -->
-    <div id="startMenu" class="fixed inset-0 modal-bg flex items-center justify-center z-50 interactive">
-        <div class="bg-gradient-to-b from-blue-400 to-indigo-600 p-8 rounded-3xl shadow-2xl border-4 border-white max-w-lg w-full mx-4 text-center text-white relative overflow-hidden">
-            <div class="absolute -top-10 -left-10 text-6xl opacity-50 animate-float">🕊️</div>
-            <div class="absolute -bottom-10 -right-10 text-6xl opacity-50 animate-float" style="animation-delay: 1s;">✨</div>
-            
-            <h1 class="text-4xl sm:text-5xl font-black mb-4 text-outline text-yellow-300">ประตูท่าแพ<br>จับคู่ตัวเลขมหัศจรรย์</h1>
-            <p class="text-lg mb-6 font-semibold bg-black/20 p-4 rounded-xl leading-relaxed">
-                ใช้ <span class="text-yellow-300 font-bold">"นิ้วชี้"</span> ผ่านกล้อง หรือ <span class="text-yellow-300 font-bold">แตะหน้าจอ</span><br>
-                เพื่อแตะ <span class="text-yellow-300 font-bold">"นกพิราบ"</span> ที่ถือป้ายส่วนย่อยให้ครบถ้วนทุกแบบ!<br>
-                <span class="text-cyan-200 text-sm block mt-1">*นกจะลอยวนในหน้าจอจนกว่าจะตอบครบ*</span><br>
-                <br>
-                ✅ ถูกต้อง +10 คะแนน<br>
-                ❌ ผิด -5 คะแนน (เวลาทั้งหมด 2 นาที)
-            </p>
-            
-            <div id="loadingStatus" class="mb-4 text-yellow-200 font-bold animate-pulse">
-                กำลังเตรียมระบบ AI Hand Tracking...
-            </div>
-
-            <button id="startBtn" disabled class="hidden interactive w-full py-4 bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-yellow-900 font-black text-2xl rounded-2xl shadow-[0_8px_0_#b45309] active:shadow-[0_0px_0_#b45309] active:translate-y-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-                ▶️ เริ่มเกมเลย!
-            </button>
-        </div>
-    </div>
-
-    <!-- Game Over Modal -->
-    <div id="gameOverMenu" class="hidden fixed inset-0 modal-bg flex items-center justify-center z-50 interactive">
-        <div class="bg-gradient-to-b from-purple-500 to-pink-600 p-8 rounded-3xl shadow-2xl border-4 border-white max-w-md w-full mx-4 text-center text-white">
-            <h1 class="text-5xl font-black mb-2 text-outline">สรุปผลการเล่น</h1>
-            
-            <div class="my-6 bg-black/30 p-6 rounded-2xl">
-                <p class="text-xl font-semibold mb-2">คะแนนรวมทั้งหมด</p>
-                <p class="text-6xl font-black text-yellow-300 text-outline"><span id="finalScoreDisplay">0</span></p>
-            </div>
-
-            <div id="medalContainer" class="mb-6 animate-bounce"></div>
-            <p id="rankMessage" class="text-2xl font-bold mb-8 text-green-200"></p>
-
-            <button onclick="resetGame()" class="interactive w-full py-4 bg-gradient-to-r from-green-400 to-green-500 hover:from-green-300 hover:to-green-400 text-green-900 font-black text-2xl rounded-2xl shadow-[0_8px_0_#166534] active:shadow-[0_0px_0_#166534] active:translate-y-2 transition-all cursor-pointer">
-                🔄 เล่นอีกครั้ง
-            </button>
-        </div>
-    </div>
-
-    <script>
-        let gameState = 'MENU';
-        let score = 0;
-        let timeLeft = 120;
-        let currentLevelIndex = 0;
-        let targetSum = 1;
-        let timerInterval = null;
-        let birds = [];
-        let particles = [];
-        let fingerPos = { x: -100, y: -100, active: false };
-
-        const levels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let remainingCorrectPairs = [];
-        let foundThisLevel = new Set();
-
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-        const videoElement = document.getElementById('webcamVideo');
-        const startBtn = document.getElementById('startBtn');
-        const loadingStatus = document.getElementById('loadingStatus');
-        
-        const hud = document.getElementById('hud');
-        const scoreDisplay = document.getElementById('scoreDisplay');
-        const timeDisplay = document.getElementById('timeDisplay');
-        const targetDisplay = document.getElementById('targetDisplay');
-        const levelDisplay = document.getElementById('levelDisplay');
-        const remainingCountDisplay = document.getElementById('remainingCount');
-        
-        const startMenu = document.getElementById('startMenu');
-        const gameOverMenu = document.getElementById('gameOverMenu');
-        const finalScoreDisplay = document.getElementById('finalScoreDisplay');
-        const medalContainer = document.getElementById('medalContainer');
-        const rankMessage = document.getElementById('rankMessage');
-
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
+const playSound = (type) => {
+    try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        let audioCtx;
-
-        function initAudio() {
-            if (!audioCtx) {
-                audioCtx = new AudioContext();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        
+        if (type === 'coin') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1);
+            gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.2);
+        } else if (type === 'wrong') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(300, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.2);
+            gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.2);
+        } else if (type === 'win') {
+             osc.type = 'square';
+             [440, 554, 659, 880].forEach((freq, i) => {
+                 setTimeout(() => {
+                     const o = ctx.createOscillator();
+                     const g = ctx.createGain();
+                     o.type = 'sine';
+                     o.connect(g);
+                     g.connect(ctx.destination);
+                     o.frequency.value = freq;
+                     g.gain.setValueAtTime(0.2, ctx.currentTime);
+                     g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+                     o.start();
+                     o.stop(ctx.currentTime + 0.3);
+                 }, i * 150);
+             });
         }
+    } catch(e) {
+        console.log("Audio skipped");
+    }
+}
 
-        function playSound(type) {
-            if (!audioCtx) return;
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            const now = audioCtx.currentTime;
-
-            if (type === 'pop') {
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(500, now);
-                osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
-                gainNode.gain.setValueAtTime(0.5, now);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-                osc.start(now);
-                osc.stop(now + 0.1);
-            } else if (type === 'error') {
-                osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(150, now);
-                osc.frequency.linearRampToValueAtTime(100, now + 0.2);
-                gainNode.gain.setValueAtTime(0.4, now);
-                gainNode.gain.linearRampToValueAtTime(0.01, now + 0.2);
-                osc.start(now);
-                osc.stop(now + 0.2);
-            } else if (type === 'win') {
-                osc.type = 'square';
-                osc.frequency.setValueAtTime(440, now);
-                osc.frequency.setValueAtTime(554.37, now + 0.1);
-                osc.frequency.setValueAtTime(659.25, now + 0.2);
-                gainNode.gain.setValueAtTime(0.3, now);
-                gainNode.gain.linearRampToValueAtTime(0, now + 0.4);
-                osc.start(now);
-                osc.stop(now + 0.4);
-            } else if (type === 'gameover') {
-                osc.type = 'triangle';
-                osc.frequency.setValueAtTime(400, now);
-                osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
-                gainNode.gain.setValueAtTime(0.5, now);
-                gainNode.gain.linearRampToValueAtTime(0.01, now + 1);
-                osc.start(now);
-                osc.stop(now + 1);
-            }
+const loadScript = (src) => {
+    return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+            resolve();
+            return;
         }
+        const script = document.createElement('script');
+        script.src = src;
+        script.crossOrigin = "anonymous";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.body.appendChild(script);
+    });
+};
 
-        let hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
+// --- Glassmorphism Shared Class ---
+const glassmorphismClass = "bg-white/20 backdrop-blur-lg border-2 border-yellow-300 shadow-[0_0_30px_rgba(255,215,0,0.8)]";
 
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.6,
-            minTrackingConfidence: 0.6
-        });
+export default function App() {
+  const [gameState, setGameState] = useState('start'); // 'start', 'tutorial', 'playing', 'end'
+  const [questions, setQuestions] = useState([]);
+  const [currentQIndex, setCurrentQIndex] = useState(0);
+  const [score, setScore] = useState(0);
+  const [stars, setStars] = useState(0);
+  const [feedback, setFeedback] = useState(null);
+  const [animatingOut, setAnimatingOut] = useState(false);
+  
+  // AR State
+  const [isARMode, setIsARMode] = useState(false);
+  const [arLoading, setArLoading] = useState(false);
+  const [arError, setArError] = useState('');
+  
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const hoverTargetRef = useRef(null);
+  const hoverTimerRef = useRef(0);
+  const cameraInstanceRef = useRef(null);
 
-        hands.onResults((results) => {
-            if (gameState !== 'PLAYING') return;
-            fingerPos.active = false;
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                const indexFingerTip = landmarks[8];
-                fingerPos.x = indexFingerTip.x;
-                fingerPos.y = indexFingerTip.y;
-                fingerPos.active = true;
-
-                const canvasX = fingerPos.x * canvas.width;
-                const canvasY = fingerPos.y * canvas.height;
-                checkCollisions(canvasX, canvasY);
-            }
-        });
-
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 640,
-            height: 480
-        });
-
-        camera.start().then(() => {
-            loadingStatus.textContent = "✅ ระบบ AI พร้อมแล้ว!";
-            loadingStatus.classList.remove('animate-pulse', 'text-yellow-200');
-            loadingStatus.classList.add('text-green-300');
-            startBtn.classList.remove('hidden');
-            startBtn.disabled = false;
-        }).catch(err => {
-            console.error("Camera Error:", err);
-            loadingStatus.textContent = "❌ ไม่สามารถเข้าถึงกล้องได้ สามารถใช้เมาส์หรือนิ้วแตะเล่นได้";
-            loadingStatus.classList.remove('animate-pulse', 'text-yellow-200');
-            loadingStatus.classList.add('text-yellow-300');
-            startBtn.classList.remove('hidden');
-            startBtn.disabled = false;
-        });
-
-        // บังคับปลดล็อกปุ่มเริ่มเกมเสมอเมื่อผ่านไป 3 วินาที (ป้องกันปุ่มค้างกรณีกล้องไม่ทำงาน)
-        setTimeout(() => {
-            if (startBtn.disabled) {
-                loadingStatus.textContent = "⚠️ กล้องตอบสนองช้า (สามารถใช้นิ้วแตะจอเล่นก่อนได้)";
-                loadingStatus.classList.remove('animate-pulse', 'text-yellow-200');
-                loadingStatus.classList.add('text-yellow-300');
-                startBtn.classList.remove('hidden');
-                startBtn.disabled = false;
-            }
-        }, 3000);
-
-        canvas.addEventListener('pointerdown', (e) => {
-            if (gameState === 'PLAYING') {
-                const rect = canvas.getBoundingClientRect();
-                const realX = rect.width - (e.clientX - rect.left);
-                const realY = e.clientY - rect.top;
-                checkCollisions(realX, realY);
-                createClickEffect(realX, realY);
-            }
-        });
-
-        function setupLevel() {
-            targetSum = levels[currentLevelIndex];
-            targetDisplay.textContent = targetSum;
-            levelDisplay.textContent = (currentLevelIndex + 1);
-            
-            remainingCorrectPairs = [];
-            for (let i = 0; i <= targetSum; i++) {
-                let j = targetSum - i;
-                remainingCorrectPairs.push(`${i} + ${j}`);
-            }
-            foundThisLevel.clear();
-            updateRemainingDisplay();
-
-            birds = [];
-            
-            // สร้างนกที่เป็นคำตอบที่ถูกต้องทั้งหมดให้ลอยอยู่ในจอตั้งแต่เริ่ม
-            remainingCorrectPairs.forEach(pair => {
-                birds.push(new Bird(pair, true));
-            });
-            
-            // สร้างนกที่เป็นคำตอบผิด (ตัวหลอก) ปนเข้าไป 3-4 ตัว
-            for (let i = 0; i < 4; i++) {
-                spawnDistractorBird();
-            }
+  useEffect(() => {
+    setQuestions(generateQuestions(TOTAL_QUESTIONS));
+    
+    const handleResize = () => {
+        if (canvasRef.current) {
+            canvasRef.current.width = window.innerWidth;
+            canvasRef.current.height = window.innerHeight;
         }
+    };
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-        function spawnDistractorBird() {
-            let p1, p2, candidate;
-            let attempts = 0;
-            do {
-                p1 = Math.floor(Math.random() * 11);
-                p2 = Math.floor(Math.random() * 11);
-                candidate = `${p1} + ${p2}`;
-                attempts++;
-            } while ((p1 + p2 === targetSum || remainingCorrectPairs.includes(candidate)) && attempts < 10);
-            
-            birds.push(new Bird(candidate, false));
-        }
+  // AR Effect Logic
+  useEffect(() => {
+      let isSubscribed = true;
 
-        function updateRemainingDisplay() {
-            const totalPairs = targetSum + 1;
-            const foundCount = foundThisLevel.size;
-            const left = totalPairs - foundCount;
-            remainingCountDisplay.textContent = left;
-        }
+      const initAR = async () => {
+          if (!isARMode || !videoRef.current) return;
+          
+          setArLoading(true);
+          setArError('');
 
-        const BIRD_COLORS = ['#ffffff', '#e2e8f0', '#cbd5e1', '#f8fafc', '#f1f5f9'];
+          try {
+              await Promise.all([
+                  loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js'),
+                  loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js')
+              ]);
 
-        class Bird {
-            constructor(text, isCorrect) {
-                this.radius = Math.min(canvas.width, canvas.height) * 0.07;
-                if (this.radius < 38) this.radius = 38;
-                
-                // สุ่มตำแหน่งเริ่มต้นให้อยู่ในหน้าจอ
-                this.x = Math.random() * (canvas.width - this.radius * 2) + this.radius;
-                this.y = Math.random() * (canvas.height - this.radius * 2) + this.radius;
-                
-                // สุ่มความเร็วและทิศทางในการลอยแบบ 360 องศา (X และ Y)
-                let speed = (canvas.height / 500) + (Math.random() * 0.8);
-                let angle = Math.random() * Math.PI * 2;
-                this.vx = Math.cos(angle) * speed;
-                this.vy = Math.sin(angle) * speed; 
-                
-                this.color = BIRD_COLORS[Math.floor(Math.random() * BIRD_COLORS.length)];
-                
-                this.text = text;
-                this.isCorrect = isCorrect;
-                this.popped = false;
-                this.wingPhase = Math.random() * Math.PI * 2;
-            }
+              if (!isSubscribed) return;
 
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                
-                // ทำให้ลอยชนขอบจอซ้าย-ขวาแล้วเด้งกลับ
-                if (this.x < this.radius) {
-                    this.x = this.radius;
-                    this.vx *= -1;
-                } else if (this.x > canvas.width - this.radius) {
-                    this.x = canvas.width - this.radius;
-                    this.vx *= -1;
-                }
+              const hands = new window.Hands({locateFile: (file) => {
+                  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+              }});
+              
+              hands.setOptions({
+                  maxNumHands: 1,
+                  modelComplexity: 1,
+                  minDetectionConfidence: 0.65,
+                  minTrackingConfidence: 0.65
+              });
+              
+              hands.onResults(onResults);
+              
+              const camera = new window.Camera(videoRef.current, {
+                  onFrame: async () => {
+                      if (videoRef.current && isSubscribed) {
+                          await hands.send({image: videoRef.current});
+                      }
+                  },
+                  width: 480,
+                  height: 360
+              });
+              
+              await camera.start();
+              cameraInstanceRef.current = camera;
+              
+              if (isSubscribed) {
+                  setArLoading(false);
+              }
+          } catch (err) {
+              console.error("AR Init Error", err);
+              if (isSubscribed) {
+                  setArError("เกิดข้อผิดพลาดในการเปิดกล้อง โปรดตรวจสอบว่าอนุญาตให้ใช้กล้องหรือไม่");
+                  setArLoading(false);
+                  setIsARMode(false);
+              }
+          }
+      };
 
-                // ทำให้ชนขอบบน-ล่างแล้วเด้งกลับ
-                if (this.y < this.radius) {
-                    this.y = this.radius;
-                    this.vy *= -1;
-                } else if (this.y > canvas.height - this.radius) {
-                    this.y = canvas.height - this.radius;
-                    this.vy *= -1;
-                }
+      if (isARMode) {
+          initAR();
+      }
 
-                this.wingPhase += 0.15;
-            }
+      return () => {
+          isSubscribed = false;
+          if (cameraInstanceRef.current) {
+              cameraInstanceRef.current.stop();
+              cameraInstanceRef.current = null;
+          }
+          if (canvasRef.current) {
+              const ctx = canvasRef.current.getContext('2d');
+              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+          }
+      };
+  }, [isARMode]);
 
-            draw(ctx) {
-                if (this.popped) return;
-                
-                ctx.save();
-                ctx.translate(this.x, this.y);
+  const onResults = (results) => {
+      const canvasCtx = canvasRef.current?.getContext('2d');
+      if (!canvasCtx || !canvasRef.current) return;
 
-                // คำนวณทิศทางหันหน้าของนก 
-                let faceDir = this.vx > 0 ? -1 : 1; 
+      const width = canvasRef.current.width;
+      const height = canvasRef.current.height;
 
-                ctx.save();
-                ctx.scale(faceDir, 1);
+      canvasCtx.clearRect(0, 0, width, height);
 
-                // ลำตัวนก
-                ctx.beginPath();
-                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                ctx.shadowColor = "rgba(0,0,0,0.3)";
-                ctx.shadowBlur = 6;
-                ctx.fill();
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = "#475569";
-                ctx.stroke();
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+          const indexFinger = results.multiHandLandmarks[0][8];
+          const x = (1 - indexFinger.x) * width;
+          const y = indexFinger.y * height;
 
-                // ปีกขยับได้
-                ctx.save();
-                let wingOffsetY = Math.sin(this.wingPhase) * (this.radius * 0.3);
-                ctx.beginPath();
-                ctx.ellipse(-this.radius * 0.5, wingOffsetY, this.radius * 0.4, this.radius * 0.25, -Math.PI / 6, 0, Math.PI * 2);
-                ctx.fillStyle = "#cbd5e1";
-                ctx.fill();
-                ctx.stroke();
-                ctx.restore();
+          // Draw Magic Cursor (เปลี่ยนเป็นรูปนิ้วชี้)
+          canvasCtx.font = "50px Arial";
+          canvasCtx.textAlign = "center";
+          canvasCtx.textBaseline = "top"; 
+          
+          // เพิ่มแสงเรืองแสงสีทองรอบๆ นิ้ว
+          canvasCtx.shadowColor = "rgba(255, 215, 0, 1)";
+          canvasCtx.shadowBlur = 20;
+          
+          // วาดอิโมจินิ้วชี้ (ปรับตำแหน่ง Y เล็กน้อยเพื่อให้ปลายนิ้วตรงกับจุดที่ชี้พอดี)
+          canvasCtx.fillText("👆", x, y - 5);
+          
+          canvasCtx.shadowBlur = 0; // คืนค่าเงาสำหรับวาดส่วนอื่น
 
-                // หัวนก
-                ctx.beginPath();
-                ctx.arc(this.radius * 0.4, -this.radius * 0.3, this.radius * 0.4, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                ctx.fill();
-                ctx.stroke();
+          let isHovering = false;
+          const interactables = document.querySelectorAll('.ar-interactable:not(:disabled)');
+          
+          for (let el of interactables) {
+              const rect = el.getBoundingClientRect();
+              if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                  isHovering = true;
+                  if (hoverTargetRef.current !== el) {
+                      hoverTargetRef.current = el;
+                      hoverTimerRef.current = Date.now();
+                  } else {
+                      const elapsed = Date.now() - hoverTimerRef.current;
+                      const progress = Math.min(elapsed / 500, 1);
+                      
+                      canvasCtx.beginPath();
+                      canvasCtx.arc(x, y, 30, -Math.PI / 2, (-Math.PI / 2) + (2 * Math.PI * progress));
+                      canvasCtx.lineWidth = 6;
+                      canvasCtx.strokeStyle = '#22c55e';
+                      canvasCtx.stroke();
 
-                // ตา
-                ctx.beginPath();
-                ctx.arc(this.radius * 0.55, -this.radius * 0.4, this.radius * 0.08, 0, Math.PI * 2);
-                ctx.fillStyle = "#0f172a";
-                ctx.fill();
+                      el.style.transform = `scale(${1 + (progress * 0.1)})`;
+                      el.style.boxShadow = `0 0 ${20 * progress}px rgba(34, 197, 94, 0.8)`;
 
-                // จงอยปาก
-                ctx.beginPath();
-                ctx.moveTo(this.radius * 0.8, -this.radius * 0.35);
-                ctx.lineTo(this.radius * 1.15, -this.radius * 0.25);
-                ctx.lineTo(this.radius * 0.8, -this.radius * 0.15);
-                ctx.closePath();
-                ctx.fillStyle = "#f59e0b";
-                ctx.fill();
-                ctx.stroke();
-                
-                ctx.restore();
+                      if (progress === 1) {
+                          el.click();
+                          hoverTargetRef.current = null;
+                          el.style.transform = '';
+                          el.style.boxShadow = '';
+                          
+                          canvasCtx.beginPath();
+                          canvasCtx.arc(x, y, 50, 0, 2 * Math.PI);
+                          canvasCtx.fillStyle = 'rgba(34, 197, 94, 0.5)';
+                          canvasCtx.fill();
+                      }
+                  }
+                  break;
+              } else {
+                  if (hoverTargetRef.current === el) {
+                      el.style.transform = '';
+                      el.style.boxShadow = '';
+                  }
+              }
+          }
 
-                // ข้อความโจทย์
-                ctx.fillStyle = "white";
-                ctx.scale(-1, 1); 
-                ctx.font = `bold ${this.radius * 0.5}px 'Prompt', sans-serif`;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.shadowColor = "rgba(0,0,0,0.7)";
-                ctx.shadowBlur = 4;
-                ctx.fillText(this.text, 0, this.radius * 0.15);
-                
-                ctx.restore();
-            }
-        }
+          if (!isHovering && hoverTargetRef.current) {
+              hoverTargetRef.current.style.transform = '';
+              hoverTargetRef.current.style.boxShadow = '';
+              hoverTargetRef.current = null;
+          }
+      }
+  };
 
-        class Particle {
-            constructor(x, y, color, type) {
-                this.x = x;
-                this.y = y;
-                this.color = color;
-                this.type = type;
-                this.size = Math.random() * 8 + 4;
-                const angle = Math.random() * Math.PI * 2;
-                const speed = Math.random() * 5 + 2;
-                this.vx = Math.cos(angle) * speed;
-                this.vy = Math.sin(angle) * speed;
-                this.life = 1.0;
-                this.decay = Math.random() * 0.03 + 0.02;
-            }
+  const startGame = (useAR) => {
+    setIsARMode(useAR);
+    setGameState('playing');
+    setScore(0);
+    setStars(0);
+    setCurrentQIndex(0);
+    setQuestions(generateQuestions(TOTAL_QUESTIONS));
+    
+    speak("สวัสดีเด็ก ๆ ยินดีต้อนรับสู่โลกแห่งการพจนภัย ที่อนุสาวรีย์สามกษัตริย์เชียงใหม่ มาเริ่มเก็บดาวคณิตศาสตร์กันเลย");
+    setTimeout(() => {
+        readCurrentQuestion(questions[0]);
+    }, 4500);
+  };
 
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                this.vy += 0.15;
-                this.life -= this.decay;
-            }
+  const returnHome = () => {
+      setIsARMode(false);
+      setGameState('start');
+  };
 
-            draw(ctx) {
-                if (this.life <= 0) return;
-                ctx.save();
-                ctx.globalAlpha = this.life;
-                ctx.translate(this.x, this.y);
-                ctx.fillStyle = this.color;
-                ctx.scale(-1, 1);
-                
-                if (this.type === 'star') {
-                    ctx.font = `${this.size * 2}px sans-serif`;
-                    ctx.fillText("⭐", 0, 0);
-                } else if (this.type === 'cross') {
-                    ctx.font = `bold ${this.size * 2}px sans-serif`;
-                    ctx.fillStyle = '#ef4444';
-                    ctx.fillText("❌", 0, 0);
+  const readCurrentQuestion = (q) => {
+      if(!q) return;
+      let text = "หาจำนวนที่หายไป";
+      if (q.isEquation) {
+          text = "จากภาพ ประโยคสัญลักษณ์การบวกข้อไหนถูกต้องคะ";
+      } else if (q.missingField === 'whole') {
+          text = `ถ้ารวม ${q.part1} กับ ${q.part2} จะได้เท่าไหร่คะ`;
+      } else if (q.missingField === 'part1') {
+          text = `มีทั้งหมด ${q.whole} แยกออกเป็น ${q.part2} แล้ว อีกส่วนคืออะไรเอ่ย`;
+      } else {
+          text = `มีทั้งหมด ${q.whole} แยกออกเป็น ${q.part1} แล้ว อีกส่วนคืออะไรเอ่ย`;
+      }
+      speak(text);
+  };
+
+  const handleAnswer = (answer) => {
+    if (feedback !== null) return; 
+
+    const currentQ = questions[currentQIndex];
+    const isCorrect = answer === currentQ.correctAnswer;
+
+    if (isCorrect) {
+      setFeedback('correct');
+      setScore(prev => prev + 50); 
+      setStars(prev => prev + 1);
+      playSound('coin');
+      speak("เก่งมากค่ะ!");
+    } else {
+      setFeedback('wrong');
+      playSound('wrong');
+      speak("ลองดูใหม่อีกครั้งนะคะ");
+    }
+
+    setTimeout(() => {
+        if(isCorrect) {
+            setAnimatingOut(true);
+            setTimeout(() => {
+                setFeedback(null);
+                setAnimatingOut(false);
+                if (currentQIndex < TOTAL_QUESTIONS - 1) {
+                  setCurrentQIndex(prev => prev + 1);
+                  readCurrentQuestion(questions[currentQIndex + 1]);
                 } else {
-                    ctx.beginPath();
-                    ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-                    ctx.fill();
+                  setGameState('end');
+                  playSound('win');
+                  speak(`เย้! ผจญภัยสำเร็จแล้ว น้องๆ ได้คะแนนทั้งหมด ${score + 50} คะแนน`);
                 }
-                ctx.restore();
-            }
+            }, 500); 
+        } else {
+            setFeedback(null); 
         }
+    }, 1500);
+  };
 
-        function createExplosion(x, y, color, isCorrect) {
-            const count = 12;
-            for (let i = 0; i < count; i++) {
-                const type = isCorrect ? (Math.random() > 0.4 ? 'star' : 'circle') : 'cross';
-                particles.push(new Particle(x, y, color, type));
-            }
-        }
+  // --- Renders ---
+  const renderItems = (count, emoji, isMissing) => {
+      if (isMissing) {
+          return <div className="text-4xl sm:text-5xl md:text-7xl font-black text-white animate-pulse drop-shadow-lg">?</div>;
+      }
+      
+      const items = [];
+      for(let i=0; i<count; i++) {
+          items.push(<span key={i} className="text-sm sm:text-lg md:text-2xl animate-bounce drop-shadow-sm leading-none" style={{animationDelay: `${i * 0.1}s`}}>{emoji}</span>);
+      }
+      
+      return (
+          <div className="flex flex-col items-center justify-center w-full">
+              {/* Number */}
+              <div className="text-2xl sm:text-3xl md:text-4xl font-black text-white drop-shadow-lg mb-1 bg-black/40 px-3 py-0.5 md:px-4 md:py-1 rounded-full border border-white/50 z-10">
+                  {count}
+              </div>
+              {/* Emojis */}
+              <div className="flex flex-wrap justify-center items-center gap-0.5 sm:gap-1 px-2 max-w-full">
+                  {items}
+              </div>
+          </div>
+      );
+  };
 
-        function createClickEffect(x, y) {
-             particles.push(new Particle(x, y, '#ffffff', 'circle'));
-        }
+  return (
+    <div 
+        className="min-h-[100dvh] w-full font-sans overflow-x-hidden relative flex flex-col items-center justify-center p-2 sm:p-4"
+        style={{
+            backgroundImage: `url('${BACKGROUND_URL}')`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundAttachment: 'fixed'
+        }}
+    >
+      {/* Fullscreen Canvas for AR Overlay */}
+      <canvas 
+          ref={canvasRef} 
+          className="fixed inset-0 z-50 pointer-events-none"
+      />
 
-        function checkCollisions(px, py) {
-            for (let i = birds.length - 1; i >= 0; i--) {
-                let b = birds[i];
-                if (!b || b.popped) continue;
+      {/* Picture-in-Picture Front Camera */}
+      {isARMode && (
+          <div className={`fixed bottom-2 right-2 sm:bottom-4 sm:right-4 z-40 p-1 rounded-2xl overflow-hidden transition-all ${glassmorphismClass} w-24 h-20 sm:w-36 sm:h-28 md:w-48 md:h-36`}>
+              <video 
+                  ref={videoRef}
+                  className="w-full h-full object-cover rounded-xl transform scale-x-[-1] bg-gray-900"
+                  autoPlay 
+                  playsInline 
+                  muted
+              />
+              {arLoading && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 rounded-xl text-white">
+                      <Loader className="w-6 h-6 animate-spin mb-1" />
+                      <span className="text-[10px] sm:text-xs font-bold text-center">กำลังเปิดกล้อง...</span>
+                  </div>
+              )}
+          </div>
+      )}
 
-                let dx = px - b.x;
-                let dy = py - b.y;
-                let distance = Math.sqrt(dx * dx + dy * dy);
+      {/* Main Content Container - Flex responsive */}
+      <div className="relative z-10 w-full max-w-5xl flex flex-col items-center justify-center h-full my-auto">
+        
+        {/* --- START SCREEN --- */}
+        {gameState === 'start' && (
+          <div className={`rounded-3xl p-6 sm:p-8 md:p-10 text-center transform transition-all duration-500 hover:scale-[1.02] w-[95%] max-w-3xl mx-auto flex flex-col items-center ${glassmorphismClass}`}>
+            <div className="flex justify-center mb-2 sm:mb-4">
+                <Trophy className="w-16 h-16 sm:w-20 sm:h-20 md:w-24 md:h-24 text-yellow-400 drop-shadow-[0_0_15px_rgba(255,215,0,1)] animate-bounce" />
+            </div>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-blue-900 mb-2 sm:mb-4 drop-shadow-[0_2px_2px_rgba(255,255,255,0.8)] tracking-wide leading-tight">
+              สามกษัตริย์พิชิต<br/>
+              <span className="text-pink-600 drop-shadow-[0_2px_2px_rgba(255,255,255,0.8)]">ภารกิจนักคิดตัวน้อย</span>
+            </h1>
+            <p className="text-base sm:text-lg md:text-2xl text-blue-900 mb-6 sm:mb-8 font-bold drop-shadow-[0_1px_1px_rgba(255,255,255,0.8)] px-2">
+              เดินทางไปอาณาจักรคณิตศาสตร์ เก็บดาวและฟื้นฟูเมืองกันเถอะ!
+            </p>
 
-                if (distance < b.radius) {
-                    b.popped = true;
-                    createExplosion(b.x, b.y, b.color, b.isCorrect);
-
-                    if (b.isCorrect) {
-                        playSound('pop');
-                        score += 10;
-                        scoreDisplay.textContent = score;
-                        scoreDisplay.classList.add('text-green-400', 'scale-125');
-                        setTimeout(() => scoreDisplay.classList.remove('text-green-400', 'scale-125'), 300);
-                        
-                        if (!foundThisLevel.has(b.text)) {
-                            foundThisLevel.add(b.text);
-                            updateRemainingDisplay();
-                        }
-
-                        birds.splice(i, 1);
-
-                        if (foundThisLevel.size >= remainingCorrectPairs.length) {
-                            playSound('win');
-                            currentLevelIndex++;
-                            
-                            if (currentLevelIndex >= levels.length) {
-                                currentLevelIndex = 0; 
-                            }
-                            setupLevel();
-                            // หยุดการตรวจสอบในลูปทันที เพื่อป้องกันระบบแครชเมื่ออาร์เรย์นกถูกรีเซ็ตใหม่
-                            break; 
-                        }
-
-                    } else {
-                        playSound('error');
-                        score -= 5;
-                        if(score < 0) score = 0;
-                        scoreDisplay.textContent = score;
-                        scoreDisplay.classList.add('text-red-500', 'scale-75');
-                        setTimeout(() => scoreDisplay.classList.remove('text-red-500', 'scale-75'), 300);
-                        
-                        birds.splice(i, 1);
-                        
-                        // เมื่อเผลอจิ้มตัวหลอกผิด ให้สร้างตัวหลอกใหม่ขึ้นมาทดแทน เพื่อให้มีตัวหลอกในหน้าจอเสมอ
-                        setTimeout(() => {
-                            if (gameState === 'PLAYING') spawnDistractorBird();
-                        }, 500);
-                    }
-                }
-            }
-        }
-
-        function gameLoop(timestamp) {
-            if (gameState !== 'PLAYING') return;
+            {arError && (
+                <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-100/90 text-red-700 rounded-xl flex items-center justify-center gap-2 border border-red-300 w-full">
+                    <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" />
+                    <span className="font-bold text-sm sm:text-base">{arError}</span>
+                </div>
+            )}
             
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            <div className="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 w-full px-2">
+                {/* Normal Mode Button */}
+                <button 
+                    onClick={() => startGame(false)}
+                    className="group relative flex items-center justify-center px-4 py-3 sm:px-6 sm:py-4 font-bold text-white transition-all duration-200 bg-blue-600 rounded-full hover:bg-blue-500 overflow-hidden shadow-xl border-2 border-blue-400 w-full sm:w-auto"
+                >
+                    <Play className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 fill-current group-hover:scale-125 transition-transform drop-shadow-md" />
+                    <span className="text-lg sm:text-xl md:text-2xl drop-shadow-md whitespace-nowrap">โหมดปกติ</span>
+                </button>
 
-            if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
-                ctx.save();
-                ctx.globalAlpha = 0.35;
-                ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                ctx.restore();
+                {/* AR Mode Button */}
+                <button 
+                    onClick={() => startGame(true)}
+                    className="group relative flex items-center justify-center px-4 py-3 sm:px-6 sm:py-4 font-bold text-white transition-all duration-200 bg-green-600 rounded-full hover:bg-green-500 overflow-hidden shadow-xl border-2 border-green-400 w-full sm:w-auto"
+                >
+                    <Camera className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3 group-hover:rotate-12 transition-transform drop-shadow-md" />
+                    <span className="text-lg sm:text-xl md:text-2xl drop-shadow-md whitespace-nowrap">โหมด AR (ใช้กล้อง)</span>
+                </button>
+            </div>
+            
+            {/* Tutorial Button */}
+            <div className="mt-4 sm:mt-6 flex justify-center w-full">
+                <button 
+                    onClick={() => setGameState('tutorial')}
+                    className="group relative inline-flex items-center justify-center px-4 py-2 sm:px-6 sm:py-3 font-bold text-blue-900 transition-all duration-200 bg-white/70 border-2 border-blue-300 rounded-full hover:bg-white focus:outline-none shadow-md"
+                >
+                    <Info className="w-5 h-5 sm:w-6 sm:h-6 mr-2 group-hover:scale-110 transition-transform" />
+                    <span className="text-base sm:text-lg md:text-xl drop-shadow-sm">วิธีการเล่น</span>
+                </button>
+            </div>
+          </div>
+        )}
 
-                const camWidth = 160;
-                const camHeight = 120;
-                const padding = 20;
-                const camX = padding;
-                const camY = canvas.height - camHeight - padding;
+        {/* --- TUTORIAL SCREEN --- */}
+        {gameState === 'tutorial' && (
+          <div className={`rounded-3xl p-6 sm:p-8 shadow-2xl text-center max-w-2xl mx-auto w-[95%] animate-[slideUp_0.3s_ease-out] ${glassmorphismClass}`}>
+             <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-blue-900 mb-4 sm:mb-6 drop-shadow-[0_2px_2px_rgba(255,255,255,0.8)] flex items-center justify-center gap-2 sm:gap-3">
+                 วิธีการเล่น <Play className="text-pink-500 fill-current w-6 h-6 sm:w-8 sm:h-8 drop-shadow-md" />
+             </h2>
+             <div className="text-left space-y-3 sm:space-y-4 text-blue-900 mb-6 sm:mb-8">
+                <div className="bg-blue-50/90 p-3 sm:p-5 rounded-2xl border-2 border-blue-200 shadow-sm">
+                   <h3 className="font-bold text-lg sm:text-xl mb-1 sm:mb-2 flex items-center gap-2"><Star className="text-yellow-500 fill-current"/> เป้าหมายของเกม</h3>
+                   <p className="text-sm sm:text-lg">น้องๆ ต้องช่วยกันหา <b>"จำนวนที่หายไป"</b> โดยดูจากความสัมพันธ์ของ <b>ส่วนรวม</b> และ <b>ส่วนย่อย</b> ให้ถูกต้อง</p>
+                </div>
+                <div className="bg-green-50/90 p-3 sm:p-5 rounded-2xl border-2 border-green-200 shadow-sm">
+                   <h3 className="font-bold text-lg sm:text-xl mb-1 sm:mb-2 flex items-center gap-2"><Hand className="text-green-500"/> โหมดปกติ</h3>
+                   <p className="text-sm sm:text-lg">ใช้นิ้วสัมผัสหน้าจอ หรือใช้เมาส์คลิกที่ตัวเลข เพื่อเลือกคำตอบ</p>
+                </div>
+                <div className="bg-purple-50/90 p-3 sm:p-5 rounded-2xl border-2 border-purple-200 shadow-sm">
+                   <h3 className="font-bold text-lg sm:text-xl mb-1 sm:mb-2 flex items-center gap-2"><Camera className="text-purple-500"/> โหมด AR (ใช้กล้อง)</h3>
+                   <p className="text-sm sm:text-lg">ยกมือขึ้นหน้ากล้อง ใช้นิ้วชี้เล็งไปที่คำตอบ <b>ชี้ค้างไว้เพียง 0.5 วินาที</b> เพื่อยืนยันคำตอบ</p>
+                </div>
+             </div>
+             <button 
+                onClick={() => setGameState('start')} 
+                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 sm:py-3 sm:px-8 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 text-lg sm:text-xl flex items-center justify-center mx-auto gap-2 border-2 border-blue-400"
+             >
+                 <Home className="w-5 h-5 sm:w-6 sm:h-6" /> เข้าใจแล้ว!
+             </button>
+          </div>
+        )}
 
-                ctx.save();
-                ctx.strokeStyle = "white";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(camX, camY, camWidth, camHeight);
-                ctx.translate(camX + camWidth, camY);
-                ctx.scale(-1, 1);
-                ctx.drawImage(videoElement, 0, 0, camWidth, camHeight);
-                ctx.restore();
-            }
+        {/* --- GAME SCREEN --- */}
+        {gameState === 'playing' && questions.length > 0 && (
+          <div className="flex flex-col h-full w-full max-w-4xl mx-auto py-2">
+            
+            {/* Header / HUD */}
+            <div className={`flex flex-wrap justify-between items-center p-2 sm:p-3 md:p-4 rounded-2xl mb-2 sm:mb-4 gap-2 ${glassmorphismClass}`}>
+               <div className="flex items-center">
+                   <button 
+                       onClick={returnHome} 
+                       className="ar-interactable p-1.5 sm:p-2 md:p-3 bg-red-500 text-white rounded-full hover:bg-red-400 transition-colors shadow-md mr-2 sm:mr-3 border-2 border-red-300 flex items-center justify-center" 
+                       title="กลับหน้าหลัก"
+                   >
+                       <Home className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" />
+                   </button>
+                   <div className="flex items-center gap-1 sm:gap-2 bg-blue-100/90 px-2 py-1 sm:px-3 sm:py-2 rounded-full border-2 border-blue-300 shadow-inner">
+                       <Map className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
+                       <span className="font-bold text-blue-800 text-xs sm:text-sm md:text-md whitespace-nowrap">ด่าน: {currentQIndex + 1}/{TOTAL_QUESTIONS}</span>
+                   </div>
+               </div>
+               
+               {/* Map Progress Bar */}
+               <div className="hidden sm:flex flex-1 mx-2 sm:mx-4 items-center relative h-3 sm:h-4 bg-gray-200/50 rounded-full overflow-hidden border border-white/30 backdrop-blur-sm">
+                   <div 
+                      className="absolute top-0 left-0 h-full bg-gradient-to-r from-green-400 to-blue-500 transition-all duration-500 rounded-full"
+                      style={{ width: `${((currentQIndex) / TOTAL_QUESTIONS) * 100}%` }}
+                   ></div>
+               </div>
 
-            // นกจะขยับตัวและกระเด้งขอบจอผ่านฟังก์ชัน update() ของมันเอง
-            for (let i = birds.length - 1; i >= 0; i--) {
-                let b = birds[i];
-                b.update();
-                b.draw(ctx);
-            }
+               <div className="flex gap-1.5 sm:gap-2 md:gap-4">
+                   <div className="flex items-center gap-1 sm:gap-2 bg-yellow-100/90 px-2 py-1 sm:px-3 sm:py-2 rounded-full border-2 border-yellow-400 shadow-inner">
+                       <Star className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-yellow-500 fill-current animate-pulse" />
+                       <span className="font-black text-yellow-700 text-sm sm:text-lg md:text-xl">{stars}</span>
+                   </div>
+                   <div className="flex items-center gap-1 sm:gap-2 bg-purple-100/90 px-2 py-1 sm:px-3 sm:py-2 rounded-full border-2 border-purple-300 shadow-inner">
+                       <Coins className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 text-purple-500" />
+                       <span className="font-black text-purple-700 text-sm sm:text-lg md:text-xl">{score}</span>
+                   </div>
+               </div>
+            </div>
 
-            for (let i = particles.length - 1; i >= 0; i--) {
-                let p = particles[i];
-                p.update();
-                p.draw(ctx);
-                if (p.life <= 0) {
-                    particles.splice(i, 1);
-                }
-            }
-
-            // วาดเอฟเฟกต์ปลายนิ้วมือ
-            if (fingerPos.active) {
-                const fx = fingerPos.x * canvas.width;
-                const fy = fingerPos.y * canvas.height;
+            {/* Play Area */}
+            <div className={`flex-1 rounded-3xl p-4 sm:p-6 shadow-2xl flex flex-col items-center justify-center relative transition-opacity duration-300 w-full ${glassmorphismClass} ${animatingOut ? 'opacity-0 scale-95' : 'opacity-100 scale-100'}`}>
                 
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(fx, fy, 15, 0, Math.PI * 2);
-                ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-                ctx.shadowColor = "#fbbf24";
-                ctx.shadowBlur = 20;
-                ctx.fill();
-                
-                ctx.beginPath();
-                ctx.arc(fx, fy, 25 + Math.sin(timestamp * 0.01) * 5, 0, Math.PI * 2);
-                ctx.strokeStyle = "rgba(251, 191, 36, 0.7)";
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                ctx.restore();
-            }
+                {/* Audio Hint Button & AR Helper */}
+                <div className="absolute top-4 right-4 flex flex-col gap-2 z-20">
+                    <button 
+                        onClick={() => readCurrentQuestion(questions[currentQIndex])}
+                        className="ar-interactable p-3 bg-pink-100 text-pink-600 rounded-full hover:bg-pink-200 hover:scale-110 transition-all shadow-md active:scale-95 transition-transform border border-pink-300"
+                    >
+                        <Volume2 className="w-6 h-6 md:w-8 md:h-8" />
+                    </button>
+                    {isARMode && (
+                        <div className="bg-green-100 text-green-700 p-2 rounded-xl text-xs font-bold text-center shadow-md animate-pulse flex flex-col items-center border border-green-300">
+                            <Hand className="w-5 h-5 mb-1" />
+                            ชี้นิ้วค้างไว้
+                        </div>
+                    )}
+                </div>
 
-            requestAnimationFrame(gameLoop);
+                <h2 className="text-xl md:text-3xl font-bold text-blue-900 mb-6 md:mb-8 text-center drop-shadow-sm pr-12 md:pr-0">
+                    {questions[currentQIndex].isEquation 
+                        ? 'ประโยคสัญลักษณ์ข้อใดถูกต้อง?' 
+                        : questions[currentQIndex].missingField === 'whole' 
+                            ? 'รวมกันได้เท่าไหร่นะ?' 
+                            : 'ส่วนที่หายไปคืออะไรเอ่ย?'}
+                </h2>
+
+                {/* Number Bond Visual Layout */}
+                <div className="relative w-full max-w-lg flex flex-col items-center select-none mt-2">
+                    
+                    {/* SVG Connecting Lines */}
+                    <svg className="absolute inset-0 w-full h-full -z-10 pointer-events-none" preserveAspectRatio="none">
+                        <path d="M 50% 20% L 25% 75%" stroke="#93C5FD" strokeWidth="8" strokeDasharray="10,10" className="animate-[dash_20s_linear_infinite]" strokeLinecap="round" />
+                        <path d="M 50% 20% L 75% 75%" stroke="#93C5FD" strokeWidth="8" strokeDasharray="10,10" className="animate-[dash_20s_linear_infinite]" strokeLinecap="round" />
+                    </svg>
+
+                    {/* WHOLE Circle (Made slightly larger to fit number + image) */}
+                    <div className="relative z-10 w-36 h-36 md:w-48 md:h-48 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex flex-col items-center justify-center shadow-xl border-4 border-white transform transition-transform mb-8 md:mb-12">
+                        <div className="absolute -top-4 bg-white px-4 py-1 rounded-full text-xs md:text-sm font-bold text-blue-600 shadow-md whitespace-nowrap border border-blue-200">ส่วนรวม (ทั้งหมด)</div>
+                        {renderItems(questions[currentQIndex].whole, questions[currentQIndex].emoji, !questions[currentQIndex].isEquation && questions[currentQIndex].missingField === 'whole')}
+                    </div>
+
+                    <div className="flex justify-between w-full px-2 md:px-12 relative z-10">
+                        {/* PART 1 Circle */}
+                        <div className="w-32 h-32 md:w-40 md:h-40 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex flex-col items-center justify-center shadow-xl border-4 border-white transform transition-transform">
+                             <div className="absolute -bottom-4 bg-white px-3 py-1 rounded-full text-xs md:text-sm font-bold text-green-600 shadow-md whitespace-nowrap border border-green-200">ส่วนย่อย 1</div>
+                            {renderItems(questions[currentQIndex].part1, questions[currentQIndex].emoji, !questions[currentQIndex].isEquation && questions[currentQIndex].missingField === 'part1')}
+                        </div>
+
+                        {/* PART 2 Circle */}
+                        <div className="w-32 h-32 md:w-40 md:h-40 bg-gradient-to-br from-pink-400 to-pink-600 rounded-full flex flex-col items-center justify-center shadow-xl border-4 border-white transform transition-transform">
+                            <div className="absolute -bottom-4 bg-white px-3 py-1 rounded-full text-xs md:text-sm font-bold text-pink-600 shadow-md whitespace-nowrap border border-pink-200">ส่วนย่อย 2</div>
+                            {renderItems(questions[currentQIndex].part2, questions[currentQIndex].emoji, !questions[currentQIndex].isEquation && questions[currentQIndex].missingField === 'part2')}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Choices (Added ar-interactable class for AR selection) */}
+                <div className="flex flex-wrap justify-center gap-4 md:gap-8 mt-12 md:mt-16 w-full pb-4">
+                    {questions[currentQIndex].options.map((option, idx) => (
+                        <button
+                            key={idx}
+                            disabled={feedback !== null}
+                            onClick={() => handleAnswer(option)}
+                            className={`ar-interactable flex items-center justify-center font-black rounded-3xl shadow-xl transform transition-all duration-200 
+                                ${questions[currentQIndex].isEquation ? 'px-4 py-2 min-w-[160px] md:min-w-[220px] h-16 md:h-20 text-2xl md:text-4xl' : 'w-20 h-20 md:w-28 md:h-28 text-4xl md:text-5xl'}
+                                ${feedback === null ? 'bg-gradient-to-b from-yellow-300 to-yellow-500 text-yellow-900 hover:-translate-y-2 hover:shadow-2xl border-b-4 border-yellow-600 active:translate-y-1 active:border-b-0' : 'bg-gray-300 text-gray-500 cursor-not-allowed border-none'}
+                            `}
+                        >
+                            {option}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Feedback Overlays */}
+                {feedback === 'correct' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/40 backdrop-blur-md rounded-3xl z-30 animate-[fadeIn_0.2s_ease-out]">
+                        <div className="text-center animate-[bounce_0.5s_ease-out] bg-white/80 px-8 py-6 rounded-3xl shadow-2xl border-4 border-green-400">
+                            <Star className="w-20 h-20 sm:w-32 sm:h-32 text-yellow-400 fill-current mx-auto mb-2 sm:mb-4 drop-shadow-[0_0_15px_rgba(255,215,0,1)]" />
+                            <h2 className="text-3xl sm:text-5xl font-black text-green-500 drop-shadow-sm">ถูกต้อง!</h2>
+                            <p className="text-xl sm:text-2xl text-green-700 font-bold mt-1 sm:mt-2">+50 คะแนน</p>
+                        </div>
+                    </div>
+                )}
+                {feedback === 'wrong' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-100/40 backdrop-blur-md rounded-3xl z-30 animate-[fadeIn_0.2s_ease-out]">
+                        <div className="text-center animate-[shake_0.5s_ease-in-out] bg-white/90 px-8 py-6 rounded-3xl shadow-2xl border-4 border-red-400">
+                            <h2 className="text-3xl sm:text-5xl font-black text-red-500 drop-shadow-sm">อ๊ะ! ยังไม่ใช่นะ</h2>
+                            <p className="text-xl sm:text-2xl text-red-700 font-bold mt-1 sm:mt-2">ลองนับดูใหม่ดีๆ นะคะ</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+          </div>
+        )}
+
+        {/* --- END SCREEN --- */}
+        {gameState === 'end' && (
+          <div className={`rounded-3xl p-6 sm:p-8 md:p-10 text-center animate-[slideUp_0.5s_ease-out] z-20 max-w-2xl mx-auto w-[95%] ${glassmorphismClass}`}>
+            <div className="relative inline-block mb-4 sm:mb-6">
+                <Trophy className="w-24 h-24 sm:w-32 sm:h-32 text-yellow-400 mx-auto drop-shadow-[0_0_20px_rgba(255,215,0,0.8)]" />
+                <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center">
+                    <Star className="w-8 h-8 sm:w-12 sm:h-12 text-yellow-200 fill-current animate-spin-slow absolute -top-2 -left-2 sm:-top-4 sm:-left-4 drop-shadow-md" />
+                    <Star className="w-6 h-6 sm:w-10 sm:h-10 text-yellow-300 fill-current animate-spin-slow absolute top-6 -right-4 sm:top-8 sm:-right-8 drop-shadow-md" />
+                </div>
+            </div>
+            
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-blue-900 mb-1 sm:mb-2 drop-shadow-[0_2px_2px_rgba(255,255,255,0.8)]">
+              ยอดเยี่ยมไปเลย!
+            </h1>
+            <p className="text-lg sm:text-2xl text-blue-800 mb-6 sm:mb-8 font-bold drop-shadow-sm">ภารกิจสำเร็จแล้ว นักสำรวจตัวน้อย</p>
+            
+            <div className="bg-white/80 rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 flex justify-around border-4 border-yellow-300 shadow-inner backdrop-blur-md">
+                <div className="flex flex-col items-center">
+                    <span className="text-blue-900 font-bold text-sm sm:text-lg mb-1">ดาวที่สะสมได้</span>
+                    <div className="flex items-center text-3xl sm:text-4xl font-black text-yellow-500 drop-shadow-sm">
+                        <Star className="w-6 h-6 sm:w-8 sm:h-8 fill-current mr-1 sm:mr-2" /> {stars}
+                    </div>
+                </div>
+                <div className="w-1 bg-yellow-200 rounded-full mx-2 sm:mx-4"></div>
+                <div className="flex flex-col items-center">
+                    <span className="text-blue-900 font-bold text-sm sm:text-lg mb-1">คะแนนรวม</span>
+                    <div className="flex items-center text-3xl sm:text-4xl font-black text-blue-500 drop-shadow-sm">
+                         {score}
+                    </div>
+                </div>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 w-full">
+                <button 
+                    onClick={returnHome}
+                    className="ar-interactable group relative inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 font-bold text-blue-900 transition-all duration-200 bg-white/90 border-4 border-blue-400 rounded-full hover:bg-white focus:outline-none shadow-xl w-full sm:w-auto"
+                >
+                  <Home className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 group-hover:scale-110 transition-transform duration-500" />
+                  <span className="text-lg sm:text-xl md:text-2xl drop-shadow-sm whitespace-nowrap">กลับหน้าหลัก</span>
+                </button>
+                <button 
+                    onClick={() => startGame(isARMode)}
+                    className="ar-interactable group relative inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-4 font-bold text-white transition-all duration-200 bg-blue-600 rounded-full hover:bg-blue-500 border-4 border-blue-400 focus:outline-none shadow-xl w-full sm:w-auto"
+                >
+                  <RefreshCw className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 group-hover:rotate-180 transition-transform duration-500" />
+                  <span className="text-lg sm:text-xl md:text-2xl drop-shadow-sm whitespace-nowrap">เล่นอีกครั้ง</span>
+                </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes dash {
+          to { stroke-dashoffset: -100; }
         }
-
-        function startTimer() {
-            timerInterval = setInterval(() => {
-                timeLeft--;
-                timeDisplay.textContent = timeLeft;
-                
-                if (timeLeft <= 15) {
-                    timeDisplay.parentElement.classList.add('animate-pulse', 'border-red-600', 'bg-red-100/90');
-                }
-
-                if (timeLeft <= 0) {
-                    clearInterval(timerInterval);
-                    endGame();
-                }
-            }, 1000);
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+          20%, 40%, 60%, 80% { transform: translateX(5px); }
         }
-
-        function startGame() {
-            initAudio();
-            gameState = 'PLAYING';
-            score = 0;
-            timeLeft = 120;
-            currentLevelIndex = 0;
-            birds = [];
-            particles = [];
-            
-            scoreDisplay.textContent = score;
-            timeDisplay.textContent = timeLeft;
-            timeDisplay.parentElement.classList.remove('animate-pulse', 'border-red-600', 'bg-red-100/90');
-            
-            setupLevel();
-
-            startMenu.classList.add('hidden');
-            gameOverMenu.classList.add('hidden');
-            hud.classList.remove('hidden');
-            
-            startTimer();
-            requestAnimationFrame(gameLoop);
+        @keyframes slideUp {
+          from { transform: translateY(50px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
         }
-
-        function endGame() {
-            gameState = 'GAMEOVER';
-            playSound('gameover');
-            hud.classList.add('hidden');
-            gameOverMenu.classList.remove('hidden');
-            
-            finalScoreDisplay.textContent = score;
-            let medal = "";
-            let message = "";
-            
-            if (score >= 100) {
-                medal = "🥇";
-                message = "ยอดเยี่ยม! เซียนนกพิราบและเลขคณิต!";
-            } else if (score >= 50) {
-                medal = "🥈";
-                message = "เก่งมาก! ความพยายามดีเยี่ยม";
-            } else {
-                medal = "🥉";
-                message = "พยายามได้ดี ฝึกฝนบ่อยๆ นะจ๊ะ";
-            }
-            
-            medalContainer.innerHTML = `<span class="text-8xl drop-shadow-2xl">${medal}</span>`;
-            rankMessage.textContent = message;
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
-
-        function resetGame() {
-            startGame();
+        .animate-spin-slow {
+            animation: spin 3s linear infinite;
         }
-
-        startBtn.addEventListener('click', startGame);
-
-    </script>
-</body>
-</html>
+      `}} />
+    </div>
+  );
+}
